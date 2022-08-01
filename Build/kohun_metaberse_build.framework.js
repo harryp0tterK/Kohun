@@ -652,7 +652,26 @@ function cwrap(ident, returnType, argTypes, opts) {
  };
 }
 
+var ALLOC_NORMAL = 0;
+
 var ALLOC_STACK = 1;
+
+function allocate(slab, allocator) {
+ var ret;
+ assert(typeof allocator === "number", "allocate no longer takes a type argument");
+ assert(typeof slab !== "number", "allocate no longer takes a number as arg0");
+ if (allocator == ALLOC_STACK) {
+  ret = stackAlloc(slab.length);
+ } else {
+  ret = _malloc(slab.length);
+ }
+ if (slab.subarray || slab.slice) {
+  HEAPU8.set(slab, ret);
+ } else {
+  HEAPU8.set(new Uint8Array(slab), ret);
+ }
+ return ret;
+}
 
 var UTF8Decoder = typeof TextDecoder !== "undefined" ? new TextDecoder("utf8") : undefined;
 
@@ -1171,26 +1190,26 @@ var tempDouble;
 var tempI64;
 
 var ASM_CONSTS = {
- 3475224: function() {
+ 3479272: function() {
   Module["emscripten_get_now_backup"] = performance.now;
  },
- 3475279: function($0) {
+ 3479327: function($0) {
   performance.now = function() {
    return $0;
   };
  },
- 3475327: function($0) {
+ 3479375: function($0) {
   performance.now = function() {
    return $0;
   };
  },
- 3475375: function() {
+ 3479423: function() {
   performance.now = Module["emscripten_get_now_backup"];
  },
- 3475430: function() {
+ 3479478: function() {
   return Module.webglContextAttributes.premultipliedAlpha;
  },
- 3475491: function() {
+ 3479539: function() {
   return Module.webglContextAttributes.preserveDrawingBuffer;
  }
 };
@@ -2702,6 +2721,10 @@ function _JS_SystemInfo_HasWebGL() {
  return Module.SystemInfo.hasWebGL;
 }
 
+function _JS_SystemInfo_IsMobile() {
+ return Module.SystemInfo.mobile;
+}
+
 function _JS_UnityEngineShouldQuit() {
  return !!Module.shouldQuit;
 }
@@ -2991,6 +3014,275 @@ function _SocketSend(socketInstance, ptr, length) {
 function _SocketState(socketInstance) {
  var socket = webSocketInstances[socketInstance];
  return socket.socket.readyState;
+}
+
+var instances = [];
+
+function _WebGLInputCreate(canvasId, x, y, width, height, fontsize, text, placeholder, isMultiLine, isPassword, isHidden, isMobile) {
+ var container = document.getElementById(UTF8ToString(canvasId));
+ var canvas = container.getElementsByTagName("canvas")[0];
+ if (!container && canvas) {
+  container = canvas.parentNode;
+ }
+ if (canvas) {
+  var scaleX = container.offsetWidth / canvas.width;
+  var scaleY = container.offsetHeight / canvas.height;
+  if (scaleX && scaleY) {
+   x *= scaleX;
+   width *= scaleX;
+   y *= scaleY;
+   height *= scaleY;
+  }
+ }
+ var input = document.createElement(isMultiLine ? "textarea" : "input");
+ input.style.position = "absolute";
+ if (isMobile) {
+  input.style.bottom = 1 + "vh";
+  input.style.left = 5 + "vw";
+  input.style.width = 90 + "vw";
+  input.style.height = (isMultiLine ? 18 : 10) + "vh";
+  input.style.fontSize = 5 + "vh";
+  input.style.borderWidth = 5 + "px";
+  input.style.borderColor = "#000000";
+ } else {
+  input.style.top = y + "px";
+  input.style.left = x + "px";
+  input.style.width = width + "px";
+  input.style.height = height + "px";
+  input.style.fontSize = fontsize + "px";
+ }
+ input.style.outlineWidth = 1 + "px";
+ input.style.opacity = isHidden ? 0 : 1;
+ input.style.resize = "none";
+ input.style.padding = "0px 1px";
+ input.style.cursor = "default";
+ input.style.touchAction = "manipulation";
+ input.spellcheck = false;
+ input.value = UTF8ToString(text);
+ input.placeholder = UTF8ToString(placeholder);
+ if (isPassword) {
+  input.type = "password";
+ }
+ if (isMobile) {
+  document.body.appendChild(input);
+ } else {
+  container.appendChild(input);
+ }
+ return instances.push(input) - 1;
+}
+
+function _WebGLInputDelete(id) {
+ var input = instances[id];
+ input.parentNode.removeChild(input);
+ instances[id] = null;
+}
+
+function _WebGLInputEnterSubmit(id, falg) {
+ var input = instances[id];
+ input.addEventListener("keydown", function(e) {
+  if (e.which && e.which === 13 || e.keyCode && e.keyCode === 13) {
+   if (falg) {
+    e.preventDefault();
+    input.blur();
+   }
+  }
+ });
+}
+
+function _WebGLInputFocus(id) {
+ var input = instances[id];
+ input.focus();
+}
+
+function _WebGLInputForceBlur(id) {
+ var input = instances[id];
+ input.blur();
+}
+
+function _WebGLInputInit() {
+ if (typeof Runtime === "undefined") Runtime = {
+  dynCall: dynCall
+ };
+}
+
+function _WebGLInputIsFocus(id) {
+ return instances[id] === document.activeElement;
+}
+
+function _WebGLInputMaxLength(id, maxlength) {
+ var input = instances[id];
+ input.maxLength = maxlength;
+}
+
+function _WebGLInputMobileOnFocusOut(id, focusout) {
+ document.body.addEventListener("focusout", function() {
+  document.body.removeEventListener("focusout", arguments.callee);
+  Runtime.dynCall("vi", focusout, [ id ]);
+ });
+}
+
+function _WebGLInputMobileRegister(touchend) {
+ var id = instances.push(null) - 1;
+ document.body.addEventListener("touchend", function() {
+  document.body.removeEventListener("touchend", arguments.callee);
+  Runtime.dynCall("vi", touchend, [ id ]);
+ });
+ return id;
+}
+
+function _WebGLInputOnBlur(id, cb) {
+ var input = instances[id];
+ input.onblur = function() {
+  Runtime.dynCall("vi", cb, [ id ]);
+ };
+}
+
+function _WebGLInputOnEditEnd(id, cb) {
+ var input = instances[id];
+ input.onchange = function() {
+  var intArray = intArrayFromString(input.value);
+  var value = allocate.length <= 2 ? allocate(intArray, ALLOC_NORMAL) : allocate(intArray, "i8", ALLOC_NORMAL);
+  Runtime.dynCall("vii", cb, [ id, value ]);
+ };
+}
+
+function _WebGLInputOnFocus(id, cb) {
+ var input = instances[id];
+ input.onfocus = function() {
+  Runtime.dynCall("vi", cb, [ id ]);
+ };
+}
+
+function _WebGLInputOnValueChange(id, cb) {
+ var input = instances[id];
+ input.oninput = function() {
+  var intArray = intArrayFromString(input.value);
+  var value = allocate.length <= 2 ? allocate(intArray, ALLOC_NORMAL) : allocate(intArray, "i8", ALLOC_NORMAL);
+  Runtime.dynCall("vii", cb, [ id, value ]);
+ };
+}
+
+function _WebGLInputSelectionDirection(id) {
+ var input = instances[id];
+ return input.selectionDirection == "backward" ? -1 : 1;
+}
+
+function _WebGLInputSelectionEnd(id) {
+ var input = instances[id];
+ return input.selectionEnd;
+}
+
+function _WebGLInputSelectionStart(id) {
+ var input = instances[id];
+ return input.selectionStart;
+}
+
+function _WebGLInputSetSelectionRange(id, start, end) {
+ var input = instances[id];
+ input.setSelectionRange(start, end);
+}
+
+function _WebGLInputTab(id, cb) {
+ var input = instances[id];
+ input.addEventListener("keydown", function(e) {
+  if (e.which && e.which === 9 || e.keyCode && e.keyCode === 9) {
+   e.preventDefault();
+   if (input.enableTabText) {
+    var val = input.value;
+    var start = input.selectionStart;
+    var end = input.selectionEnd;
+    input.value = val.substr(0, start) + "\t" + val.substr(end, val.length);
+    input.setSelectionRange(start + 1, start + 1);
+    input.oninput();
+   } else {
+    Runtime.dynCall("vii", cb, [ id, e.shiftKey ? -1 : 1 ]);
+   }
+  }
+ });
+}
+
+function _WebGLInputText(id, text) {
+ var input = instances[id];
+ input.value = UTF8ToString(text);
+}
+
+function _WebGLWindowInit() {
+ if (typeof Runtime === "undefined") Runtime = {
+  dynCall: dynCall
+ };
+}
+
+function _WebGLWindowInjectFullscreen() {
+ document.makeFullscreen = function(id, keepAspectRatio) {
+  var getFullScreenObject = function() {
+   var doc = window.document;
+   var objFullScreen = doc.fullscreenElement || doc.mozFullScreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement;
+   return objFullScreen;
+  };
+  var eventFullScreen = function(callback) {
+   document.addEventListener("fullscreenchange", callback, false);
+   document.addEventListener("webkitfullscreenchange", callback, false);
+   document.addEventListener("mozfullscreenchange", callback, false);
+   document.addEventListener("MSFullscreenChange", callback, false);
+  };
+  var removeEventFullScreen = function(callback) {
+   document.removeEventListener("fullscreenchange", callback, false);
+   document.removeEventListener("webkitfullscreenchange", callback, false);
+   document.removeEventListener("mozfullscreenchange", callback, false);
+   document.removeEventListener("MSFullscreenChange", callback, false);
+  };
+  var div = document.createElement("div");
+  document.body.appendChild(div);
+  var canvas = document.getElementById(id);
+  var beforeParent = canvas.parentNode;
+  var beforeStyle = window.getComputedStyle(canvas);
+  var beforeWidth = parseInt(beforeStyle.width);
+  var beforeHeight = parseInt(beforeStyle.height);
+  var index = Array.from(beforeParent.children).findIndex(function(v) {
+   return v == canvas;
+  });
+  div.appendChild(canvas);
+  var fullscreenFunc = function() {
+   if (getFullScreenObject()) {
+    if (keepAspectRatio) {
+     var ratio = Math.min(window.screen.width / beforeWidth, window.screen.height / beforeHeight);
+     var width = Math.floor(beforeWidth * ratio);
+     var height = Math.floor(beforeHeight * ratio);
+     canvas.style.width = width + "px";
+     canvas.style.height = height + "px";
+    } else {
+     canvas.style.width = window.screen.width + "px";
+     canvas.style.height = window.screen.height + "px";
+    }
+   } else {
+    canvas.style.width = beforeWidth + "px";
+    canvas.style.height = beforeHeight + "px";
+    beforeParent.insertBefore(canvas, Array.from(beforeParent.children)[index]);
+    div.parentNode.removeChild(div);
+    removeEventFullScreen(fullscreenFunc);
+   }
+  };
+  eventFullScreen(fullscreenFunc);
+  if (div.mozRequestFullScreen) div.mozRequestFullScreen(); else if (div.webkitRequestFullScreen) div.webkitRequestFullScreen(); else if (div.msRequestFullscreen) div.msRequestFullscreen(); else if (div.requestFullscreen) div.requestFullscreen();
+ };
+}
+
+function _WebGLWindowOnBlur(cb) {
+ window.addEventListener("blur", function() {
+  Runtime.dynCall("v", cb, []);
+ });
+}
+
+function _WebGLWindowOnFocus(cb) {
+ window.addEventListener("focus", function() {
+  Runtime.dynCall("v", cb, []);
+ });
+}
+
+function _WebGLWindowOnResize(cb) {
+ window.addEventListener("resize", function() {
+  Runtime.dynCall("v", cb, []);
+ });
 }
 
 var ExceptionInfoAttrs = {
@@ -13808,6 +14100,7 @@ var asmLibraryArg = {
  "JS_SystemInfo_HasCursorLock": _JS_SystemInfo_HasCursorLock,
  "JS_SystemInfo_HasFullscreen": _JS_SystemInfo_HasFullscreen,
  "JS_SystemInfo_HasWebGL": _JS_SystemInfo_HasWebGL,
+ "JS_SystemInfo_IsMobile": _JS_SystemInfo_IsMobile,
  "JS_UnityEngineShouldQuit": _JS_UnityEngineShouldQuit,
  "JS_WebRequest_Abort": _JS_WebRequest_Abort,
  "JS_WebRequest_Create": _JS_WebRequest_Create,
@@ -13825,6 +14118,31 @@ var asmLibraryArg = {
  "SocketRecvLength": _SocketRecvLength,
  "SocketSend": _SocketSend,
  "SocketState": _SocketState,
+ "WebGLInputCreate": _WebGLInputCreate,
+ "WebGLInputDelete": _WebGLInputDelete,
+ "WebGLInputEnterSubmit": _WebGLInputEnterSubmit,
+ "WebGLInputFocus": _WebGLInputFocus,
+ "WebGLInputForceBlur": _WebGLInputForceBlur,
+ "WebGLInputInit": _WebGLInputInit,
+ "WebGLInputIsFocus": _WebGLInputIsFocus,
+ "WebGLInputMaxLength": _WebGLInputMaxLength,
+ "WebGLInputMobileOnFocusOut": _WebGLInputMobileOnFocusOut,
+ "WebGLInputMobileRegister": _WebGLInputMobileRegister,
+ "WebGLInputOnBlur": _WebGLInputOnBlur,
+ "WebGLInputOnEditEnd": _WebGLInputOnEditEnd,
+ "WebGLInputOnFocus": _WebGLInputOnFocus,
+ "WebGLInputOnValueChange": _WebGLInputOnValueChange,
+ "WebGLInputSelectionDirection": _WebGLInputSelectionDirection,
+ "WebGLInputSelectionEnd": _WebGLInputSelectionEnd,
+ "WebGLInputSelectionStart": _WebGLInputSelectionStart,
+ "WebGLInputSetSelectionRange": _WebGLInputSetSelectionRange,
+ "WebGLInputTab": _WebGLInputTab,
+ "WebGLInputText": _WebGLInputText,
+ "WebGLWindowInit": _WebGLWindowInit,
+ "WebGLWindowInjectFullscreen": _WebGLWindowInjectFullscreen,
+ "WebGLWindowOnBlur": _WebGLWindowOnBlur,
+ "WebGLWindowOnFocus": _WebGLWindowOnFocus,
+ "WebGLWindowOnResize": _WebGLWindowOnResize,
  "__cxa_allocate_exception": ___cxa_allocate_exception,
  "__cxa_atexit": ___cxa_atexit,
  "__cxa_begin_catch": ___cxa_begin_catch,
@@ -14323,21 +14641,31 @@ var dynCall_viiiiiii = Module["dynCall_viiiiiii"] = createExportWrapper("dynCall
 
 var dynCall_iiiiiiii = Module["dynCall_iiiiiiii"] = createExportWrapper("dynCall_iiiiiiii");
 
-var dynCall_viiji = Module["dynCall_viiji"] = createExportWrapper("dynCall_viiji");
-
 var dynCall_fii = Module["dynCall_fii"] = createExportWrapper("dynCall_fii");
 
 var dynCall_viifi = Module["dynCall_viifi"] = createExportWrapper("dynCall_viifi");
 
 var dynCall_vijii = Module["dynCall_vijii"] = createExportWrapper("dynCall_vijii");
 
-var dynCall_jiiiiiiiiii = Module["dynCall_jiiiiiiiiii"] = createExportWrapper("dynCall_jiiiiiiiiii");
+var dynCall_viiji = Module["dynCall_viiji"] = createExportWrapper("dynCall_viiji");
+
+var dynCall_viiff = Module["dynCall_viiff"] = createExportWrapper("dynCall_viiff");
+
+var dynCall_iiiifii = Module["dynCall_iiiifii"] = createExportWrapper("dynCall_iiiifii");
+
+var dynCall_iiifii = Module["dynCall_iiifii"] = createExportWrapper("dynCall_iiifii");
+
+var dynCall_viiiifii = Module["dynCall_viiiifii"] = createExportWrapper("dynCall_viiiifii");
+
+var dynCall_viiffi = Module["dynCall_viiffi"] = createExportWrapper("dynCall_viiffi");
 
 var dynCall_j = Module["dynCall_j"] = createExportWrapper("dynCall_j");
 
 var dynCall_ji = Module["dynCall_ji"] = createExportWrapper("dynCall_ji");
 
 var dynCall_jijj = Module["dynCall_jijj"] = createExportWrapper("dynCall_jijj");
+
+var dynCall_jiiiiiiiiii = Module["dynCall_jiiiiiiiiii"] = createExportWrapper("dynCall_jiiiiiiiiii");
 
 var dynCall_jiii = Module["dynCall_jiii"] = createExportWrapper("dynCall_jiii");
 
@@ -14365,13 +14693,53 @@ var dynCall_diii = Module["dynCall_diii"] = createExportWrapper("dynCall_diii");
 
 var dynCall_vfiii = Module["dynCall_vfiii"] = createExportWrapper("dynCall_vfiii");
 
-var dynCall_iiiifii = Module["dynCall_iiiifii"] = createExportWrapper("dynCall_iiiifii");
+var dynCall_viiiiiiiiifi = Module["dynCall_viiiiiiiiifi"] = createExportWrapper("dynCall_viiiiiiiiifi");
 
-var dynCall_iiifii = Module["dynCall_iiifii"] = createExportWrapper("dynCall_iiifii");
+var dynCall_iiiiiiiiiiiii = Module["dynCall_iiiiiiiiiiiii"] = createExportWrapper("dynCall_iiiiiiiiiiiii");
 
-var dynCall_viiiifii = Module["dynCall_viiiifii"] = createExportWrapper("dynCall_viiiifii");
+var dynCall_fi = Module["dynCall_fi"] = createExportWrapper("dynCall_fi");
 
-var dynCall_viiffi = Module["dynCall_viiffi"] = createExportWrapper("dynCall_viiffi");
+var dynCall_iiifi = Module["dynCall_iiifi"] = createExportWrapper("dynCall_iiifi");
+
+var dynCall_iiiifi = Module["dynCall_iiiifi"] = createExportWrapper("dynCall_iiiifi");
+
+var dynCall_vifi = Module["dynCall_vifi"] = createExportWrapper("dynCall_vifi");
+
+var dynCall_viif = Module["dynCall_viif"] = createExportWrapper("dynCall_viif");
+
+var dynCall_jjji = Module["dynCall_jjji"] = createExportWrapper("dynCall_jjji");
+
+var dynCall_viidiji = Module["dynCall_viidiji"] = createExportWrapper("dynCall_viidiji");
+
+var dynCall_viidjii = Module["dynCall_viidjii"] = createExportWrapper("dynCall_viidjii");
+
+var dynCall_viiij = Module["dynCall_viiij"] = createExportWrapper("dynCall_viiij");
+
+var dynCall_viiiifi = Module["dynCall_viiiifi"] = createExportWrapper("dynCall_viiiifi");
+
+var dynCall_fifi = Module["dynCall_fifi"] = createExportWrapper("dynCall_fifi");
+
+var dynCall_fiiii = Module["dynCall_fiiii"] = createExportWrapper("dynCall_fiiii");
+
+var dynCall_jiiji = Module["dynCall_jiiji"] = createExportWrapper("dynCall_jiiji");
+
+var dynCall_fiifi = Module["dynCall_fiifi"] = createExportWrapper("dynCall_fiifi");
+
+var dynCall_iiffi = Module["dynCall_iiffi"] = createExportWrapper("dynCall_iiffi");
+
+var dynCall_iiidii = Module["dynCall_iiidii"] = createExportWrapper("dynCall_iiidii");
+
+var dynCall_viiiidi = Module["dynCall_viiiidi"] = createExportWrapper("dynCall_viiiidi");
+
+var dynCall_vidi = Module["dynCall_vidi"] = createExportWrapper("dynCall_vidi");
+
+var dynCall_iiiiiiidii = Module["dynCall_iiiiiiidii"] = createExportWrapper("dynCall_iiiiiiidii");
+
+var dynCall_viiiidij = Module["dynCall_viiiidij"] = createExportWrapper("dynCall_viiiidij");
+
+var dynCall_dii = Module["dynCall_dii"] = createExportWrapper("dynCall_dii");
+
+var dynCall_iifi = Module["dynCall_iifi"] = createExportWrapper("dynCall_iifi");
 
 var dynCall_ijji = Module["dynCall_ijji"] = createExportWrapper("dynCall_ijji");
 
@@ -14399,67 +14767,17 @@ var dynCall_iijii = Module["dynCall_iijii"] = createExportWrapper("dynCall_iijii
 
 var dynCall_iijiii = Module["dynCall_iijiii"] = createExportWrapper("dynCall_iijiii");
 
-var dynCall_fifi = Module["dynCall_fifi"] = createExportWrapper("dynCall_fifi");
+var dynCall_jijii = Module["dynCall_jijii"] = createExportWrapper("dynCall_jijii");
 
-var dynCall_fiiii = Module["dynCall_fiiii"] = createExportWrapper("dynCall_fiiii");
+var dynCall_iji = Module["dynCall_iji"] = createExportWrapper("dynCall_iji");
 
-var dynCall_jiiji = Module["dynCall_jiiji"] = createExportWrapper("dynCall_jiiji");
-
-var dynCall_fiifi = Module["dynCall_fiifi"] = createExportWrapper("dynCall_fiifi");
-
-var dynCall_iiffi = Module["dynCall_iiffi"] = createExportWrapper("dynCall_iiffi");
-
-var dynCall_iiidii = Module["dynCall_iiidii"] = createExportWrapper("dynCall_iiidii");
-
-var dynCall_iiiifi = Module["dynCall_iiiifi"] = createExportWrapper("dynCall_iiiifi");
-
-var dynCall_viiiiiiiiifi = Module["dynCall_viiiiiiiiifi"] = createExportWrapper("dynCall_viiiiiiiiifi");
-
-var dynCall_iiiiiiiiiiiii = Module["dynCall_iiiiiiiiiiiii"] = createExportWrapper("dynCall_iiiiiiiiiiiii");
-
-var dynCall_vifi = Module["dynCall_vifi"] = createExportWrapper("dynCall_vifi");
-
-var dynCall_viif = Module["dynCall_viif"] = createExportWrapper("dynCall_viif");
-
-var dynCall_jjji = Module["dynCall_jjji"] = createExportWrapper("dynCall_jjji");
-
-var dynCall_viidiji = Module["dynCall_viidiji"] = createExportWrapper("dynCall_viidiji");
-
-var dynCall_viidjii = Module["dynCall_viidjii"] = createExportWrapper("dynCall_viidjii");
-
-var dynCall_viiff = Module["dynCall_viiff"] = createExportWrapper("dynCall_viiff");
-
-var dynCall_fi = Module["dynCall_fi"] = createExportWrapper("dynCall_fi");
-
-var dynCall_iiifi = Module["dynCall_iiifi"] = createExportWrapper("dynCall_iiifi");
-
-var dynCall_iifi = Module["dynCall_iifi"] = createExportWrapper("dynCall_iifi");
+var dynCall_iijji = Module["dynCall_iijji"] = createExportWrapper("dynCall_iijji");
 
 var dynCall_fiiffi = Module["dynCall_fiiffi"] = createExportWrapper("dynCall_fiiffi");
 
 var dynCall_viiififii = Module["dynCall_viiififii"] = createExportWrapper("dynCall_viiififii");
 
-var dynCall_viiij = Module["dynCall_viiij"] = createExportWrapper("dynCall_viiij");
-
-var dynCall_viiiifi = Module["dynCall_viiiifi"] = createExportWrapper("dynCall_viiiifi");
-
-var dynCall_jijii = Module["dynCall_jijii"] = createExportWrapper("dynCall_jijii");
-
-var dynCall_viiiidi = Module["dynCall_viiiidi"] = createExportWrapper("dynCall_viiiidi");
-
-var dynCall_vidi = Module["dynCall_vidi"] = createExportWrapper("dynCall_vidi");
-
-var dynCall_iiiiiiidii = Module["dynCall_iiiiiiidii"] = createExportWrapper("dynCall_iiiiiiidii");
-
-var dynCall_viiiidij = Module["dynCall_viiiidij"] = createExportWrapper("dynCall_viiiidij");
-
-var dynCall_dii = Module["dynCall_dii"] = createExportWrapper("dynCall_dii");
-
 var dynCall_viffffi = Module["dynCall_viffffi"] = createExportWrapper("dynCall_viffffi");
-
-var dynCall_iji = Module["dynCall_iji"] = createExportWrapper("dynCall_iji");
-
-var dynCall_iijji = Module["dynCall_iijji"] = createExportWrapper("dynCall_iijji");
 
 var dynCall_viijiiiiii = Module["dynCall_viijiiiiii"] = createExportWrapper("dynCall_viijiiiiii");
 
@@ -14473,13 +14791,15 @@ var dynCall_iiiiiiiiiii = Module["dynCall_iiiiiiiiiii"] = createExportWrapper("d
 
 var dynCall_viij = Module["dynCall_viij"] = createExportWrapper("dynCall_viij");
 
+var dynCall_jiiiii = Module["dynCall_jiiiii"] = createExportWrapper("dynCall_jiiiii");
+
 var dynCall_viji = Module["dynCall_viji"] = createExportWrapper("dynCall_viji");
 
 var dynCall_viiiji = Module["dynCall_viiiji"] = createExportWrapper("dynCall_viiiji");
 
 var dynCall_iiiiiiiiii = Module["dynCall_iiiiiiiiii"] = createExportWrapper("dynCall_iiiiiiiiii");
 
-var dynCall_jiiiii = Module["dynCall_jiiiii"] = createExportWrapper("dynCall_jiiiii");
+var dynCall_iiiiiiiiiiiiii = Module["dynCall_iiiiiiiiiiiiii"] = createExportWrapper("dynCall_iiiiiiiiiiiiii");
 
 var dynCall_viifii = Module["dynCall_viifii"] = createExportWrapper("dynCall_viifii");
 
@@ -14762,8 +15082,6 @@ var dynCall_viiiiffffii = Module["dynCall_viiiiffffii"] = createExportWrapper("d
 var dynCall_fiiiiii = Module["dynCall_fiiiiii"] = createExportWrapper("dynCall_fiiiiii");
 
 var dynCall_idiiii = Module["dynCall_idiiii"] = createExportWrapper("dynCall_idiiii");
-
-var dynCall_iiiiiiiiiiiiii = Module["dynCall_iiiiiiiiiiiiii"] = createExportWrapper("dynCall_iiiiiiiiiiiiii");
 
 var dynCall_jjii = Module["dynCall_jjii"] = createExportWrapper("dynCall_jjii");
 
@@ -15238,6 +15556,17 @@ function invoke_viiiifi(index, a1, a2, a3, a4, a5, a6) {
  }
 }
 
+function invoke_iiiiiiii(index, a1, a2, a3, a4, a5, a6, a7) {
+ var sp = stackSave();
+ try {
+  return dynCall_iiiiiiii(index, a1, a2, a3, a4, a5, a6, a7);
+ } catch (e) {
+  stackRestore(sp);
+  if (e !== e + 0 && e !== "longjmp") throw e;
+  _setThrew(1, 0);
+ }
+}
+
 function invoke_fii(index, a1, a2) {
  var sp = stackSave();
  try {
@@ -15260,10 +15589,43 @@ function invoke_viifi(index, a1, a2, a3, a4) {
  }
 }
 
-function invoke_iiiiiiii(index, a1, a2, a3, a4, a5, a6, a7) {
+function invoke_viiff(index, a1, a2, a3, a4) {
  var sp = stackSave();
  try {
-  return dynCall_iiiiiiii(index, a1, a2, a3, a4, a5, a6, a7);
+  dynCall_viiff(index, a1, a2, a3, a4);
+ } catch (e) {
+  stackRestore(sp);
+  if (e !== e + 0 && e !== "longjmp") throw e;
+  _setThrew(1, 0);
+ }
+}
+
+function invoke_fi(index, a1) {
+ var sp = stackSave();
+ try {
+  return dynCall_fi(index, a1);
+ } catch (e) {
+  stackRestore(sp);
+  if (e !== e + 0 && e !== "longjmp") throw e;
+  _setThrew(1, 0);
+ }
+}
+
+function invoke_iiifi(index, a1, a2, a3, a4) {
+ var sp = stackSave();
+ try {
+  return dynCall_iiifi(index, a1, a2, a3, a4);
+ } catch (e) {
+  stackRestore(sp);
+  if (e !== e + 0 && e !== "longjmp") throw e;
+  _setThrew(1, 0);
+ }
+}
+
+function invoke_viiffi(index, a1, a2, a3, a4, a5) {
+ var sp = stackSave();
+ try {
+  dynCall_viiffi(index, a1, a2, a3, a4, a5);
  } catch (e) {
   stackRestore(sp);
   if (e !== e + 0 && e !== "longjmp") throw e;
@@ -15337,17 +15699,6 @@ function invoke_vfiii(index, a1, a2, a3, a4) {
  }
 }
 
-function invoke_viiffi(index, a1, a2, a3, a4, a5) {
- var sp = stackSave();
- try {
-  dynCall_viiffi(index, a1, a2, a3, a4, a5);
- } catch (e) {
-  stackRestore(sp);
-  if (e !== e + 0 && e !== "longjmp") throw e;
-  _setThrew(1, 0);
- }
-}
-
 function invoke_viiiiiiiiifi(index, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) {
  var sp = stackSave();
  try {
@@ -15385,39 +15736,6 @@ function invoke_viif(index, a1, a2, a3) {
  var sp = stackSave();
  try {
   dynCall_viif(index, a1, a2, a3);
- } catch (e) {
-  stackRestore(sp);
-  if (e !== e + 0 && e !== "longjmp") throw e;
-  _setThrew(1, 0);
- }
-}
-
-function invoke_viiff(index, a1, a2, a3, a4) {
- var sp = stackSave();
- try {
-  dynCall_viiff(index, a1, a2, a3, a4);
- } catch (e) {
-  stackRestore(sp);
-  if (e !== e + 0 && e !== "longjmp") throw e;
-  _setThrew(1, 0);
- }
-}
-
-function invoke_fi(index, a1) {
- var sp = stackSave();
- try {
-  return dynCall_fi(index, a1);
- } catch (e) {
-  stackRestore(sp);
-  if (e !== e + 0 && e !== "longjmp") throw e;
-  _setThrew(1, 0);
- }
-}
-
-function invoke_iiifi(index, a1, a2, a3, a4) {
- var sp = stackSave();
- try {
-  return dynCall_iiifi(index, a1, a2, a3, a4);
  } catch (e) {
   stackRestore(sp);
   if (e !== e + 0 && e !== "longjmp") throw e;
@@ -15601,17 +15919,6 @@ function invoke_iiji(index, a1, a2, a3, a4) {
  }
 }
 
-function invoke_viiji(index, a1, a2, a3, a4, a5) {
- var sp = stackSave();
- try {
-  dynCall_viiji(index, a1, a2, a3, a4, a5);
- } catch (e) {
-  stackRestore(sp);
-  if (e !== e + 0 && e !== "longjmp") throw e;
-  _setThrew(1, 0);
- }
-}
-
 function invoke_vijii(index, a1, a2, a3, a4, a5) {
  var sp = stackSave();
  try {
@@ -15623,10 +15930,21 @@ function invoke_vijii(index, a1, a2, a3, a4, a5) {
  }
 }
 
-function invoke_jiiiiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) {
+function invoke_viiji(index, a1, a2, a3, a4, a5) {
  var sp = stackSave();
  try {
-  return dynCall_jiiiiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
+  dynCall_viiji(index, a1, a2, a3, a4, a5);
+ } catch (e) {
+  stackRestore(sp);
+  if (e !== e + 0 && e !== "longjmp") throw e;
+  _setThrew(1, 0);
+ }
+}
+
+function invoke_viiiji(index, a1, a2, a3, a4, a5, a6) {
+ var sp = stackSave();
+ try {
+  dynCall_viiiji(index, a1, a2, a3, a4, a5, a6);
  } catch (e) {
   stackRestore(sp);
   if (e !== e + 0 && e !== "longjmp") throw e;
@@ -15638,6 +15956,17 @@ function invoke_jijj(index, a1, a2, a3, a4, a5) {
  var sp = stackSave();
  try {
   return dynCall_jijj(index, a1, a2, a3, a4, a5);
+ } catch (e) {
+  stackRestore(sp);
+  if (e !== e + 0 && e !== "longjmp") throw e;
+  _setThrew(1, 0);
+ }
+}
+
+function invoke_jiiiiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) {
+ var sp = stackSave();
+ try {
+  return dynCall_jiiiiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
  } catch (e) {
   stackRestore(sp);
   if (e !== e + 0 && e !== "longjmp") throw e;
@@ -15689,10 +16018,32 @@ function invoke_vji(index, a1, a2, a3) {
  }
 }
 
-function invoke_viiiji(index, a1, a2, a3, a4, a5, a6) {
+function invoke_jjji(index, a1, a2, a3, a4, a5) {
  var sp = stackSave();
  try {
-  dynCall_viiiji(index, a1, a2, a3, a4, a5, a6);
+  return dynCall_jjji(index, a1, a2, a3, a4, a5);
+ } catch (e) {
+  stackRestore(sp);
+  if (e !== e + 0 && e !== "longjmp") throw e;
+  _setThrew(1, 0);
+ }
+}
+
+function invoke_viiij(index, a1, a2, a3, a4, a5) {
+ var sp = stackSave();
+ try {
+  dynCall_viiij(index, a1, a2, a3, a4, a5);
+ } catch (e) {
+  stackRestore(sp);
+  if (e !== e + 0 && e !== "longjmp") throw e;
+  _setThrew(1, 0);
+ }
+}
+
+function invoke_viiiidij(index, a1, a2, a3, a4, a5, a6, a7, a8) {
+ var sp = stackSave();
+ try {
+  dynCall_viiiidij(index, a1, a2, a3, a4, a5, a6, a7, a8);
  } catch (e) {
   stackRestore(sp);
   if (e !== e + 0 && e !== "longjmp") throw e;
@@ -15788,43 +16139,10 @@ function invoke_iijiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9) {
  }
 }
 
-function invoke_jjji(index, a1, a2, a3, a4, a5) {
- var sp = stackSave();
- try {
-  return dynCall_jjji(index, a1, a2, a3, a4, a5);
- } catch (e) {
-  stackRestore(sp);
-  if (e !== e + 0 && e !== "longjmp") throw e;
-  _setThrew(1, 0);
- }
-}
-
-function invoke_viiij(index, a1, a2, a3, a4, a5) {
- var sp = stackSave();
- try {
-  dynCall_viiij(index, a1, a2, a3, a4, a5);
- } catch (e) {
-  stackRestore(sp);
-  if (e !== e + 0 && e !== "longjmp") throw e;
-  _setThrew(1, 0);
- }
-}
-
 function invoke_jijii(index, a1, a2, a3, a4, a5) {
  var sp = stackSave();
  try {
   return dynCall_jijii(index, a1, a2, a3, a4, a5);
- } catch (e) {
-  stackRestore(sp);
-  if (e !== e + 0 && e !== "longjmp") throw e;
-  _setThrew(1, 0);
- }
-}
-
-function invoke_viiiidij(index, a1, a2, a3, a4, a5, a6, a7, a8) {
- var sp = stackSave();
- try {
-  dynCall_viiiidij(index, a1, a2, a3, a4, a5, a6, a7, a8);
  } catch (e) {
   stackRestore(sp);
   if (e !== e + 0 && e !== "longjmp") throw e;
@@ -15942,10 +16260,10 @@ function invoke_viij(index, a1, a2, a3, a4) {
  }
 }
 
-function invoke_viji(index, a1, a2, a3, a4) {
+function invoke_jiiiii(index, a1, a2, a3, a4, a5) {
  var sp = stackSave();
  try {
-  dynCall_viji(index, a1, a2, a3, a4);
+  return dynCall_jiiiii(index, a1, a2, a3, a4, a5);
  } catch (e) {
   stackRestore(sp);
   if (e !== e + 0 && e !== "longjmp") throw e;
@@ -15953,10 +16271,10 @@ function invoke_viji(index, a1, a2, a3, a4) {
  }
 }
 
-function invoke_jiiiii(index, a1, a2, a3, a4, a5) {
+function invoke_viji(index, a1, a2, a3, a4) {
  var sp = stackSave();
  try {
-  return dynCall_jiiiii(index, a1, a2, a3, a4, a5);
+  dynCall_viji(index, a1, a2, a3, a4);
  } catch (e) {
   stackRestore(sp);
   if (e !== e + 0 && e !== "longjmp") throw e;
@@ -17071,6 +17389,10 @@ if (!Object.getOwnPropertyDescriptor(Module, "jsWebRequestGetResponseHeaderStrin
 
 if (!Object.getOwnPropertyDescriptor(Module, "IDBFS")) Module["IDBFS"] = function() {
  abort("'IDBFS' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)");
+};
+
+if (!Object.getOwnPropertyDescriptor(Module, "instances")) Module["instances"] = function() {
+ abort("'instances' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)");
 };
 
 if (!Object.getOwnPropertyDescriptor(Module, "webSocketInstances")) Module["webSocketInstances"] = function() {
